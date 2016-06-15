@@ -23,12 +23,12 @@
 
 (defn upload-file
   "Upload a file, return true if it worked."
-  [local-file remote-name]
+  [local-file remote-name content-type]
   (l/info "Uploading" local-file "to" remote-name ".")
   (let [^AmazonS3 client (aws-client)
         request (new PutObjectRequest (:archive-s3-bucket env) remote-name local-file)
         metadata (new ObjectMetadata)]
-        (.setContentType metadata "application/json")
+        (.setContentType metadata content-type)
         (.withMetadata request metadata)
         (.putObject client request)
     

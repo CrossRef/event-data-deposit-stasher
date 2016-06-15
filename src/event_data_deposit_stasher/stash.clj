@@ -31,12 +31,12 @@
     (l/info "Got" (count all-deposits) "deposits")
     (let [source-ids (lagotto/source-ids all-deposits)
           all-file (save-deposits-json all-deposits)]
-      (util/upload-file all-file (str (clj-time-format/unparse ymd start-date) "/all.json" ))
+      (util/upload-file all-file (str (clj-time-format/unparse ymd start-date) "/all.json") "application/json")
       (.delete all-file)
       (l/info "Working with following source-ids" source-ids)
       (doseq [source-id source-ids]
         (let [filtered (filter #(= (get % "source_id") source-id) all-deposits)
               filtered-file (save-deposits-json filtered)]
-          (util/upload-file filtered-file (str (clj-time-format/unparse ymd start-date) "/" source-id ".json" ))
+          (util/upload-file filtered-file (str (clj-time-format/unparse ymd start-date) "/" source-id ".json" ) "application/json")
           (.delete filtered-file))))))
 
