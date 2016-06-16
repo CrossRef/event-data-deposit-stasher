@@ -44,7 +44,7 @@
   (l/info "Daily Task")
   ; Stash for the last n days if the job's not been done.
   (let [aws-client (util/aws-client)
-        interval-range (map #(day-to-day-interval (clj-time/minus (clj-time/now) (clj-time/days %))) (range 1 num-back-days))]
+        interval-range (map #(day-to-day-interval (clj-time/minus (clj-time/now) (clj-time/days %))) (range 0 num-back-days))]
     (l/info "Checking " (count interval-range) "past days")
     (doseq [[interval-start interval-end] interval-range]
       (let [start-str (clj-time-format/unparse ymd interval-start)
