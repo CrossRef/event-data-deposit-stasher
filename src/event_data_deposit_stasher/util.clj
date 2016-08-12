@@ -13,9 +13,11 @@
   (:gen-class))
 
 
-(defn aws-client
+(defn get-aws-client
   []
   (new AmazonS3Client (new BasicAWSCredentials (:s3-access-key-id env) (:s3-secret-access-key env))))
+
+(def aws-client (delay (get-aws-client)))
 
 (def doi-resolvers #{"doi.org" "dx.doi.org"})
 
@@ -35,16 +37,15 @@
   "Upload a file, return true if it worked."
   [local-file remote-name content-type]
   (l/info "Uploading" local-file "to" remote-name ".")
-  (let [^AmazonS3 client (aws-client)
-        request (new PutObjectRequest (:archive-s3-bucket env) remote-name local-file)
+  (let [request (new PutObjectRequest (:archive-s3-bucket env) remote-name local-file)
         metadata (new ObjectMetadata)]
         (.setContentType metadata content-type)
         (.withMetadata request metadata)
-        (.putObject client request)
+        (.putObject @aws-client request)
     
     ; S3 isn't transactional, may take a while to propagate. Try a few times to see if it uploaded OK, return success.
     (try-try-again {:sleep 5000 :tries 10 :return? :truthy?} (fn []
-      (.doesObjectExist client  (:archive-s3-bucket env) remote-name)))))
+      (.doesObjectExist @aws-client  (:archive-s3-bucket env) remote-name)))))
 
 
 (defn transform-deposit
