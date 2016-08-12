@@ -48,8 +48,8 @@
 
 
 (defn transform-deposit
-  """Transform deposit into an event schema. Temporary workaround until functionality is in Lagotto."""
   [item]
+  """Transform deposit into an event schema. Temporary workaround until functionality is in Lagotto."""
   (let [message-action (get item "message_action" "add")
       subj-id (get item "subj_id")
       obj-id (get item "obj_id")
