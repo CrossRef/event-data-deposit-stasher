@@ -43,8 +43,7 @@
   []
   (l/info "Daily Task")
   ; Stash for the last n days if the job's not been done.
-  (let [aws-client (util/aws-client)
-        interval-range (map #(day-to-day-interval (clj-time/minus (clj-time/now) (clj-time/days %))) (range 0 num-back-days))]
+  (let [interval-range (map #(day-to-day-interval (clj-time/minus (clj-time/now) (clj-time/days %))) (range 0 num-back-days))]
     (l/info "Checking " (count interval-range) "past days")
     (doseq [[interval-start interval-end] interval-range]
       (let [start-str (clj-time-format/unparse ymd interval-start)
@@ -52,7 +51,7 @@
         (l/info "Check " start-str "to" end-str)
           (let [expected-log-name (str "collected/" start-str "/events.json")]
             (l/info "Check" expected-log-name "exists")
-            (when-not (.doesObjectExist aws-client (:archive-s3-bucket env) expected-log-name)
+            (when-not (.doesObjectExist @util/aws-client (:archive-s3-bucket env) expected-log-name)
               (l/info "Doesn't exist, fetch and create.")
               (stash/run-all interval-start interval-end)))))))
 
