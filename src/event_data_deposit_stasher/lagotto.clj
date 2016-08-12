@@ -17,8 +17,6 @@
     (let [response @(http-client/get url {:query-params {"page" page-number "from_date" start-date-str "until_date" end-date-str}})
           parsed (json/read-str (:body response))
           page-deposits (get-in parsed ["deposits"])]
-
-      ; keep doing until we get an empty page.
       (if (empty? page-deposits)
         deposits
         (recur (inc page-number) (concat deposits page-deposits))))))

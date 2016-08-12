@@ -50,7 +50,7 @@
       (let [start-str (clj-time-format/unparse ymd interval-start)
             end-str (clj-time-format/unparse ymd interval-end)]
         (l/info "Check " start-str "to" end-str)
-          (let [expected-log-name (str start-str "/all.json")]
+          (let [expected-log-name (str "collected/" start-str "/events.json")]
             (l/info "Check" expected-log-name "exists")
             (when-not (.doesObjectExist aws-client (:archive-s3-bucket env) expected-log-name)
               (l/info "Doesn't exist, fetch and create.")

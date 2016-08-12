@@ -7,7 +7,8 @@
   (:require [config.core :refer [env]])
   (:require [clj-time.core :as clj-time]
             [clj-time.format :as clj-time-format]
-            [clj-time.coerce :as clj-time-coerce]))
+            [clj-time.coerce :as clj-time-coerce]
+            [crossref.util.doi :as cr-doi]))
 
 (def ymd (clj-time-format/formatter "yyyy-MM-dd"))
 
@@ -22,21 +23,40 @@
       (json/write structure writer))
   tempfile))
 
+(defn group-and-project
+  "Group a seq by the group-function, values projected by project-f"
+  [coll group-f project-f]
+  (loop [grouped (transient {})
+         coll coll]
+    (if (empty? coll)
+      (persistent! grouped)
+      (let [h (first coll)
+            t (rest coll)
+            p (project-f h)
+            g (group-f h)
+            grouped (assoc! grouped g (conj (get grouped g) p))]
+        (recur grouped t)))))
+
+
+
 (defn run-all
   "Run the whole process of archiving, splitting and uploading a day's logs with start and end date string."
   [start-date end-date]
   (let [; All deposits as Clojure objects
-        all-deposits (lagotto/fetch-all-deposits start-date end-date)]
-    (l/info "Run all on" start-date "ending" end-date)
-    (l/info "Got" (count all-deposits) "deposits")
-    (let [source-ids (lagotto/source-ids all-deposits)
-          all-file (save-deposits-json all-deposits)]
-      (util/upload-file all-file (str (clj-time-format/unparse ymd start-date) "/all.json") "application/json")
-      (.delete all-file)
-      (l/info "Working with following source-ids" source-ids)
-      (doseq [source-id source-ids]
-        (let [filtered (filter #(= (get % "source_id") source-id) all-deposits)
-              filtered-file (save-deposits-json filtered)]
-          (util/upload-file filtered-file (str (clj-time-format/unparse ymd start-date) "/" source-id ".json" ) "application/json")
-          (.delete filtered-file))))))
+        all-deposits (lagotto/fetch-all-deposits start-date end-date)
+        normalized (map util/transform-deposit all-deposits)
+        date-str (clj-time-format/unparse ymd start-date)
 
+        ; Group into pathname => file
+        all {(str "collected/" date-str "/events.json") normalized}
+        source (group-and-project normalized #(str "collected/" date-str "/sources/" (:source_id %) "/events.json") identity)
+        doi (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
+        doi-source (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
+
+        ; all-results (merge all source doi doi-source)
+        all-results (merge all source doi doi-source)]
+
+        (doseq [[keyname data] all-results]
+          (let [f (save-deposits-json data)]
+            (util/upload-file f keyname "application/json")
+            (.delete f)))))
