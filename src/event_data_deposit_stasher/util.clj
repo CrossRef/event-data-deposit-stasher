@@ -1,7 +1,8 @@
 (ns event-data-deposit-stasher.util
   "Utility functions"
   (:require [config.core :refer [env]])
-  (:require [clojure.tools.logging :as l])
+  (:require [clojure.tools.logging :as l]
+            [clojure.data.json :as json])
   (:import [com.amazonaws.services.s3 AmazonS3 AmazonS3Client]
            [com.amazonaws.auth BasicAWSCredentials]
            [com.amazonaws.services.s3.model GetObjectRequest PutObjectRequest ObjectMetadata])
@@ -35,22 +36,42 @@
 
 (defn upload-file
   "Upload a file, return true if it worked."
-  [local-file remote-name content-type]
+  [local-file bucket-name remote-name content-type]
   (l/info "Uploading" local-file "to" remote-name ".")
-  (let [request (new PutObjectRequest (:archive-s3-bucket env) remote-name local-file)
+  (let [request (new PutObjectRequest bucket-name remote-name local-file)
         metadata (new ObjectMetadata)]
         (.setContentType metadata content-type)
         (.withMetadata request metadata)
-        (.putObject @aws-client request)
+        (time (.putObject @aws-client request))
     
     ; S3 isn't transactional, may take a while to propagate. Try a few times to see if it uploaded OK, return success.
     (try-try-again {:sleep 5000 :tries 10 :return? :truthy?} (fn []
       (.doesObjectExist @aws-client  (:archive-s3-bucket env) remote-name)))))
 
+(defn upload-bytes
+  "Upload a stream, return true if it worked."
+  [bytes bucket-name remote-name content-type]
+  (let [metadata (new ObjectMetadata)
+        _ (.setContentType metadata content-type)
+        _ (.setContentLength metadata (alength bytes))
+        request (new PutObjectRequest bucket-name remote-name (new java.io.ByteArrayInputStream bytes) metadata)]
+        (.putObject @aws-client request)))
+
+(defn download-json-file
+  "Download a JSON file from S3 and return parsed."
+  [bucket-name remote-name]
+  (l/info "Downloading from " remote-name)
+  (let [request (new GetObjectRequest bucket-name remote-name)
+        obj (.getObject @aws-client request)
+        ^InputStream stream (.getObjectContent obj)
+        result (json/read (new java.io.BufferedReader (new java.io.InputStreamReader stream)))]
+    (.close obj)
+    result))
+
 
 (defn transform-deposit
   [item]
-  """Transform deposit into an event schema. Temporary workaround until functionality is in Lagotto."""
+  "Transform deposit into an event schema. Temporary workaround until functionality is in Lagotto."
   (let [message-action (get item "message_action" "add")
       subj-id (get item "subj_id")
       obj-id (get item "obj_id")

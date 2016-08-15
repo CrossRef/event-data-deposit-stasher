@@ -12,7 +12,7 @@
 
 (def ymd (clj-time-format/formatter "yyyy-MM-dd"))
 
-
+(def num-threads 50)
 
 (defn save-deposits-json
   "Save a sequence of deposit objects in a temp file, return it."
@@ -38,14 +38,47 @@
         (recur grouped t)))))
 
 
-
-(defn run-all
-  "Run the whole process of archiving, splitting and uploading a day's logs with start and end date string."
-  [start-date end-date]
+(defn archive
+  "Archive Deposit data for given day."
+  [start-date end-date key-name]
   (let [; All deposits as Clojure objects
         all-deposits (lagotto/fetch-all-deposits start-date end-date)
-        normalized (map util/transform-deposit all-deposits)
-        date-str (clj-time-format/unparse ymd start-date)
+        f (save-deposits-json all-deposits)]
+      (util/upload-file f (:archive-s3-bucket env) key-name "application/json")
+      (.delete f)))
+
+
+(defn upload-in-thread
+  "Start an upload of a chunk of JSON objects in a Thread. Return the Thread immediately.
+  Items is a seq of [key, data] tuples."
+  [items]
+  (let [num-items (count items)
+        thread (new Thread (fn []
+                  (loop [[[keyname data] & rest-items] items
+                         c 0]
+                    (when (zero? (mod c 10))
+                      (l/info "Uploaded" c "/" num-items "," (count rest-items) "remaining on" (.toString (Thread/currentThread))))
+
+                    (let [response-data {"message-type" "event-list" "total-events" (count data) "events" data}
+                          ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
+                          stream (new java.io.OutputStreamWriter buffer)]
+                      (json/write response-data stream)
+                      (.close stream)
+                      (util/upload-bytes (.toByteArray buffer) (:query-s3-bucket env) keyname "application/json"))
+                    (if (empty? rest-items)
+                      (l/info "FINISHED" c "/" num-items "on" (.toString (Thread/currentThread)))
+                      (recur rest-items (inc c))))))]
+  (l/info "Create thread" thread)
+  (.start thread)
+  (l/info "Return" thread)
+  thread))
+
+(defn update-query-api
+  "Load Query API with data from given day."
+  [input-key-name date-str]
+  (let [input (util/download-json-file (:archive-s3-bucket env) input-key-name)
+        deposits (get input "deposits")
+        normalized (map util/transform-deposit deposits)
 
         ; Group into pathname => file
         all {(str "collected/" date-str "/events.json") normalized}
@@ -53,10 +86,20 @@
         doi (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
         doi-source (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
 
-        ; all-results (merge all source doi doi-source)
-        all-results (merge all source doi doi-source)]
+        all-results (merge all source doi doi-source)
+        num-queries (count all-results)
+        partition-size (/ num-queries num-threads)
 
-        (doseq [[keyname data] all-results]
-          (let [f (save-deposits-json data)]
-            (util/upload-file f keyname "application/json")
-            (.delete f)))))
+        partitions (partition-all partition-size all-results)
+        running-partitions (doall (map upload-in-thread partitions))]
+
+  (l/info "Got" (count deposits) "deposits")
+  (l/info "Resulting in" num-queries "queries")
+  (l/info "Uploading in" (count partitions) "partitions...")
+
+  (doseq [p running-partitions]
+    (.join p))
+
+  (l/info "Done!")))
+
+
