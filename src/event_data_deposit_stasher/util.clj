@@ -60,13 +60,15 @@
 (defn download-json-file
   "Download a JSON file from S3 and return parsed."
   [bucket-name remote-name]
-  (l/info "Downloading from " remote-name)
-  (let [request (new GetObjectRequest bucket-name remote-name)
-        obj (.getObject @aws-client request)
-        ^InputStream stream (.getObjectContent obj)
-        result (json/read (new java.io.BufferedReader (new java.io.InputStreamReader stream)))]
-    (.close obj)
-    result))
+  ; (l/info "Downloading from " remote-name)
+  (when
+    (.doesObjectExist @aws-client bucket-name remote-name)
+      (let [request (new GetObjectRequest bucket-name remote-name)
+            obj (.getObject @aws-client request)
+            ^InputStream stream (.getObjectContent obj)
+            result (json/read (new java.io.BufferedReader (new java.io.InputStreamReader stream)))]
+        (.close obj)
+        result)))
 
 
 (defn transform-deposit

@@ -66,17 +66,41 @@
         (l/info "Check " start-str)
           (let [; Input (deposits) and output (events) filenames. These live in different buckets.
                 input-name (str "collected/" start-str "/deposits.json")
+
+                ; Markers for whether or not this day's worth of collected events have been saved in 'collected' and 'occurred' respectively.
+
                 ; Test output name that's generated along with a load of other queries. 
-                output-name (str "collected/" start-str "/events.json")
+                collected-flag-name (str "__CONTROL__/collected/" start-str)
+
+                ; Test output name that's generated along with a load of other queries. 
+                occurred-flag-name (str "__CONTROL__/occurred/" start-str)
+
                 input-exists (.doesObjectExist @util/aws-client (:archive-s3-bucket env) input-name)
-                output-exists (.doesObjectExist @util/aws-client (:query-s3-bucket env) output-name)]
+                collected-flag-exists (.doesObjectExist @util/aws-client (:query-s3-bucket env) collected-flag-name)
+                occurred-flag-exists (.doesObjectExist @util/aws-client (:query-s3-bucket env) occurred-flag-name)]
             
             (l/info "Check input" input-name "exists:" input-exists)
-            (l/info "Check output " output-name "exists: " output-exists)
+            (l/info "Check output flag 'collected' " collected-flag-name "exists: " collected-flag-exists)
+            (l/info "Check output flag 'occurred' " occurred-flag-name "exists: " occurred-flag-exists)
 
-            (when (and input-exists (not output-exists))
-              (l/info "Doesn't exist, fetch and create.")
-              (stash/update-query-api input-name start-str)))))))
+            ; Ability to re-create either independently depending on whether the flag exists (or has been removed to re-process).
+            (when (and input-exists (or
+                                      (not collected-flag-exists)
+                                      (not occurred-flag-exists)))
+              (let [input (util/download-json-file (:archive-s3-bucket env) input-name)
+                _ (clojure.pprint/pprint input)
+                    deposits (get input "deposits")
+                    normalized (map util/transform-deposit deposits)]
+
+                (when (not collected-flag-exists)
+                  (l/info "Update query API 'collected'" start-str)
+                  (stash/update-query-api-collected normalized start-str)
+                  (util/upload-bytes (byte-array 0) (:query-s3-bucket env) collected-flag-name "application/json"))
+
+                (when (not occurred-flag-exists)
+                  (l/info "Update query API 'occurred'" start-str)
+                  (stash/update-query-api-occurred normalized start-str)
+                  (util/upload-bytes (byte-array 0) (:query-s3-bucket env) occurred-flag-name "application/json")))))))))
 
 (defn invalid-command
   [command]
@@ -99,6 +123,7 @@
     "daily-load-query-api" (update-query-api 1)
 
     ; To generate back-data.
-    "historical-archive" (archive 300)
+    ; Data collected before May 2016 isn't consistent enough.
+    "historical-archive" (archive 100)
     "historical-load-query-api" (update-query-api 100)
     (invalid-command (first args))))

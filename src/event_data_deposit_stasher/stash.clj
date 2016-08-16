@@ -73,18 +73,44 @@
   (l/info "Return" thread)
   thread))
 
-(defn update-query-api
-  "Load Query API with data from given day."
-  [input-key-name date-str]
-  (let [input (util/download-json-file (:archive-s3-bucket env) input-key-name)
-        deposits (get input "deposits")
-        normalized (map util/transform-deposit deposits)
+(defn merge-upload-in-thread
+  "Start an upload/merge of a chunk of JSON objects in a Thread. Return the Thread immediately.
+  Items is a seq of [key, data] tuples."
+  [items]
+  (let [num-items (count items)
+        thread (new Thread (fn []
+                  (loop [[[keyname data] & rest-items] items
+                         c 0]
+                    (when (zero? (mod c 10))
+                      (l/info "Uploaded" c "/" num-items "," (count rest-items) "remaining on" (.toString (Thread/currentThread))))
 
-        ; Group into pathname => file
-        all {(str "collected/" date-str "/events.json") normalized}
-        source (group-and-project normalized #(str "collected/" date-str "/sources/" (:source_id %) "/events.json") identity)
-        doi (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
-        doi-source (group-and-project normalized #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
+                    (let [previous (util/download-json-file (:query-s3-bucket env) keyname)
+                          previous-data (get previous "items")
+                          merged-data (concat data previous-data)
+                          response-data {"message-type" "event-list" "total-events" (count merged-data) "events" data}
+                          ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
+                          stream (new java.io.OutputStreamWriter buffer)]
+                      (json/write response-data stream)
+                      (.close stream)
+                      (util/upload-bytes (.toByteArray buffer) (:query-s3-bucket env) keyname "application/json")
+                      (l/info "Merge prev" (count previous-data) "with" (count data) "into" (count merged-data)))
+
+                    (if (empty? rest-items)
+                      (l/info "FINISHED" c "/" num-items "on" (.toString (Thread/currentThread)))
+                      (recur rest-items (inc c))))))]
+  (l/info "Create thread" thread)
+  (.start thread)
+  (l/info "Return" thread)
+  thread))
+
+(defn update-query-api-collected
+  "Load Query API with data collected on given day."
+  [deposits date-str]
+  (let [; Group into pathname => file
+        all {(str "collected/" date-str "/events.json") deposits}
+        source (group-and-project deposits #(str "collected/" date-str "/sources/" (:source_id %) "/events.json") identity)
+        doi (group-and-project deposits #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
+        doi-source (group-and-project deposits #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
 
         all-results (merge all source doi doi-source)
         num-queries (count all-results)
@@ -101,5 +127,35 @@
     (.join p))
 
   (l/info "Done!")))
+
+
+(defn date-str-from-occurred [event]
+  (clj-time-format/unparse ymd (clj-time-format/parse (get event :occurred_at))))
+
+(defn update-query-api-occurred
+  "Load Query API with data that occurred on a given day."
+  [deposits date-str]
+  (let [; Group into pathname => file
+        all (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/events.json") identity)
+        source (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/sources/" (:source_id %) "/events.json") identity)
+        doi (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
+        doi-source (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
+
+        all-results (merge all source doi doi-source)
+        num-queries (count all-results)
+        partition-size (/ num-queries num-threads)
+
+        partitions (partition-all partition-size all-results)
+        running-partitions (doall (map merge-upload-in-thread partitions))]
+
+  (l/info "Got" (count deposits) "deposits")
+  (l/info "Resulting in" num-queries "queries")
+  (l/info "Uploading in" (count partitions) "partitions...")
+
+  (doseq [p running-partitions]
+    (.join p))
+
+  (l/info "Done!")))
+
 
 
