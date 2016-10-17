@@ -124,8 +124,8 @@
         ; Group into pathname => file
 
         all {[(str "collected/" date-str "/events.json")
-              (str "collected/" (prev-date-str date-str) "/events.json")
-              (str "collected/" (next-date-str date-str) "/events.json")]
+              (str url-base "collected/" (prev-date-str date-str) "/events.json")
+              (str url-base "collected/" (next-date-str date-str) "/events.json")]
               deposits}
 
         source (group-and-project deposits (fn [event]
