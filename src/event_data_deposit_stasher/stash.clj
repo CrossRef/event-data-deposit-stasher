@@ -40,10 +40,10 @@
 
 (defn archive
   "Archive Deposit data for given day."
-  [start-date end-date key-name prev-url next-url]
+  [start-date end-date key-name]
   (let [; All deposits as Clojure objects
         all-deposits (lagotto/fetch-all-deposits start-date end-date)
-        f (save-deposits-json all-deposits prev-url next-url)]
+        f (save-deposits-json all-deposits)]
       (util/upload-file f (:archive-s3-bucket env) key-name "application/json")
       (.delete f)))
 
