@@ -40,10 +40,10 @@
 
 (defn archive
   "Archive Deposit data for given day."
-  [start-date end-date key-name]
+  [start-date end-date key-name prev-url next-url]
   (let [; All deposits as Clojure objects
         all-deposits (lagotto/fetch-all-deposits start-date end-date)
-        f (save-deposits-json all-deposits)]
+        f (save-deposits-json all-deposits prev-url next-url)]
       (util/upload-file f (:archive-s3-bucket env) key-name "application/json")
       (.delete f)))
 
@@ -54,12 +54,13 @@
   [items]
   (let [num-items (count items)
         thread (new Thread (fn []
-                  (loop [[[keyname data] & rest-items] items
+                  (loop [[[[keyname prev-url next-url] data] & rest-items] items
                          c 0]
+
                     (when (zero? (mod c 10))
                       (l/info "Uploaded" c "/" num-items "," (count rest-items) "remaining on" (.toString (Thread/currentThread))))
 
-                    (let [response-data {"message-type" "event-list" "total-events" (count data) "events" data}
+                    (let [response-data {"message-type" "event-list" "total-events" (count data) "events" data "previous" prev-url "next" next-url}
                           ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
                           stream (new java.io.OutputStreamWriter buffer)]
                       (json/write response-data stream)
@@ -79,15 +80,16 @@
   [items]
   (let [num-items (count items)
         thread (new Thread (fn []
-                  (loop [[[keyname data] & rest-items] items
+                  (loop [[[[keyname prev-url next-url] data] & rest-items] items
                          c 0]
+
                     (when (zero? (mod c 10))
                       (l/info "Uploaded" c "/" num-items "," (count rest-items) "remaining on" (.toString (Thread/currentThread))))
 
                     (let [previous (util/download-json-file (:query-s3-bucket env) keyname)
                           previous-data (get previous "items")
                           merged-data (concat data previous-data)
-                          response-data {"message-type" "event-list" "total-events" (count merged-data) "events" data}
+                          response-data {"message-type" "event-list" "total-events" (count merged-data) "events" data "previous" prev-url "next" next-url}
                           ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
                           stream (new java.io.OutputStreamWriter buffer)]
                       (json/write response-data stream)
@@ -103,14 +105,46 @@
   (l/info "Return" thread)
   thread))
 
+
+(defn date-str-from-occurred [event]
+  (clj-time-format/unparse ymd (clj-time-format/parse (get event :occurred_at))))
+
+(defn prev-date-str [date-str]
+  (clj-time-format/unparse ymd (clj-time/minus (clj-time-format/parse ymd date-str) (clj-time/days 1))))
+
+(defn next-date-str [date-str]
+  (clj-time-format/unparse ymd (clj-time/plus (clj-time-format/parse ymd date-str) (clj-time/days 1))))
+
+
 (defn update-query-api-collected
   "Load Query API with data collected on given day."
   [deposits date-str]
-  (let [; Group into pathname => file
-        all {(str "collected/" date-str "/events.json") deposits}
-        source (group-and-project deposits #(str "collected/" date-str "/sources/" (:source_id %) "/events.json") identity)
-        doi (group-and-project deposits #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
-        doi-source (group-and-project deposits #(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
+  (let [url-base (:url-base env)
+
+        ; Group into pathname => file
+
+        all {[(str "collected/" date-str "/events.json")
+              (str "collected/" (prev-date-str date-str) "/events.json")
+              (str "collected/" (next-date-str date-str) "/events.json")]
+              deposits}
+
+        source (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "collected/" date-str "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "collected/" (prev-date-str date-str) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "collected/" (next-date-str date-str) "/sources/" (:source_id event) "/events.json")])) identity)
+        
+        doi (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
+                                             (str url-base "collected/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
+                                             (str url-base "collected/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")])) identity)
+        
+        doi-source (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "collected/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "collected/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")])) identity)
 
         all-results (merge all source doi doi-source)
         num-queries (count all-results)
@@ -129,17 +163,37 @@
   (l/info "Done!")))
 
 
-(defn date-str-from-occurred [event]
-  (clj-time-format/unparse ymd (clj-time-format/parse (get event :occurred_at))))
-
 (defn update-query-api-occurred
   "Load Query API with data that occurred on a given day."
   [deposits date-str]
-  (let [; Group into pathname => file
-        all (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/events.json") identity)
-        source (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/sources/" (:source_id %) "/events.json") identity)
-        doi (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/works/" (cr-doi/non-url-doi (:obj_id %)) "/events.json") identity)
-        doi-source (group-and-project deposits #(str "occurred/" (date-str-from-occurred %) "/works/" (cr-doi/non-url-doi (:obj_id %)) "/sources/" (:source_id %) "/events.json") identity)
+  (let [url-base (:url-base env)
+
+        ; We have a load of events. Project each event into the key it will have in the bucket. Also supply the previous and next urls, which will need to be carried through.
+
+        ; Group into pathname => file
+        all (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "occurred/" date-str "/events.json")
+                                             (str url-base "occurred/" (prev-date-str date-str) "/events.json")
+                                             (str url-base "occurred/" (next-date-str date-str) "/events.json")])) identity)
+
+        source (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "occurred/" date-str "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "occurred/" (prev-date-str date-str) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "occurred/" (next-date-str date-str) "/sources/" (:source_id event) "/events.json")])) identity)
+        
+        doi (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "occurred/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
+                                             (str url-base "occurred/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
+                                             (str url-base "occurred/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")])) identity)
+        
+        doi-source (group-and-project deposits (fn [event]
+                                          (let [date-str (date-str-from-occurred event)]
+                                            [(str "occurred/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "occurred/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
+                                             (str url-base "occurred/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")])) identity)
 
         all-results (merge all source doi doi-source)
         num-queries (count all-results)

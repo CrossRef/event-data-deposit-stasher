@@ -19,6 +19,8 @@
     :lagotto-instance-url ; full base URL of lagotto instance.
   })
 
+; also :exclude-sources : comma-separated value of source names to exclude in query API.
+
 (defn missing-config-keys
   "Ensure all config keys are present. Return missing keys or nil if OK."
   []
@@ -33,6 +35,11 @@
         [(clj-time/date-midnight (clj-time/year day-before) (clj-time/month day-before) (clj-time/day day-before))
          (clj-time/date-midnight (clj-time/year day) (clj-time/month day) (clj-time/day day))]))
 
+(defn get-excluded-sources
+  "Get set of sources to exclude. Should be nil set except for unforseen circumstances."
+  []
+  (set (.split (or (:exclude-sources env) "") ",")))
+
 (def ymd (clj-time-format/formatter "yyyy-MM-dd"))
 
 (defn archive
@@ -40,7 +47,8 @@
   [num-back-days]
   (l/info "Daily Archive Task")
   ; Stash for the last n days if the job's not been done.
-  (let [interval-range (map #(day-to-day-interval (clj-time/minus (clj-time/now) (clj-time/days %))) (range 0 num-back-days))]
+  (let [now (clj-time/now)
+        interval-range (map #(day-to-day-interval (clj-time/minus now (clj-time/days %))) (range 0 num-back-days))]
     (l/info "Checking " (count interval-range) "past days")
     (doseq [[interval-start interval-end] interval-range]
       (let [start-str (clj-time-format/unparse ymd interval-start)
@@ -88,18 +96,21 @@
                                       (not collected-flag-exists)
                                       (not occurred-flag-exists)))
               (let [input (util/download-json-file (:archive-s3-bucket env) input-name)
-                _ (clojure.pprint/pprint input)
                     deposits (get input "deposits")
-                    normalized (map util/transform-deposit deposits)]
+                    ; Normalize to Event Data Schema.
+                    normalized (map util/transform-deposit deposits)
+                    ; Exclude sources if necessary.
+                    excluded-sources (get-excluded-sources)
+                    filtered-source (remove #(excluded-sources (% "source_id")) normalized)]
 
                 (when (not collected-flag-exists)
                   (l/info "Update query API 'collected'" start-str)
-                  (stash/update-query-api-collected normalized start-str)
+                  (stash/update-query-api-collected filtered-source start-str)
                   (util/upload-bytes (byte-array 0) (:query-s3-bucket env) collected-flag-name "application/json"))
 
                 (when (not occurred-flag-exists)
                   (l/info "Update query API 'occurred'" start-str)
-                  (stash/update-query-api-occurred normalized start-str)
+                  (stash/update-query-api-occurred filtered-source start-str)
                   (util/upload-bytes (byte-array 0) (:query-s3-bucket env) occurred-flag-name "application/json")))))))))
 
 (defn invalid-command

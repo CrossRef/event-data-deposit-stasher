@@ -3,6 +3,7 @@
   :license {:name "MIT License"
             :url "https://opensource.org/licenses/MIT"}
   :dependencies [[org.clojure/clojure "1.8.0"]
+                 [org.clojure/tools.nrepl "0.2.12"]
                  [yogthos/config "0.8"]
                  [org.clojure/tools.logging "0.3.1"]
                  [com.amazonaws/aws-java-sdk "1.11.6"]
