@@ -54,16 +54,16 @@
   [items]
   (let [num-items (count items)
         thread (new Thread (fn []
-                  (loop [[[[keyname prev-url next-url] data] & rest-items] items
+                  (loop [[[keyname data] & rest-items] items
                          c 0]
 
                     (when (zero? (mod c 10))
                       (l/info "Uploaded" c "/" num-items "," (count rest-items) "remaining on" (.toString (Thread/currentThread))))
 
-                    (let [response-data {"message-type" "event-list" "total-events" (count data) "events" data "previous" prev-url "next" next-url}
+                    (let [;response-data {"message-type" "event-list" "total-events" (count data) "events" data "previous" prev-url "next" next-url}
                           ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
                           stream (new java.io.OutputStreamWriter buffer)]
-                      (json/write response-data stream)
+                      (json/write data stream)
                       (.close stream)
                       (util/upload-bytes (.toByteArray buffer) (:query-s3-bucket env) keyname "application/json"))
                     (if (empty? rest-items)
@@ -80,7 +80,7 @@
   [items]
   (let [num-items (count items)
         thread (new Thread (fn []
-                  (loop [[[[keyname prev-url next-url] data] & rest-items] items
+                  (loop [[[keyname data] & rest-items] items
                          c 0]
 
                     (when (zero? (mod c 10))
@@ -89,10 +89,10 @@
                     (let [previous (util/download-json-file (:query-s3-bucket env) keyname)
                           previous-data (get previous "items")
                           merged-data (concat data previous-data)
-                          response-data {"message-type" "event-list" "total-events" (count merged-data) "events" data "previous" prev-url "next" next-url}
+                          ; response-data {"message-type" "event-list" "total-events" (count merged-data) "events" data "previous" prev-url "next" next-url}
                           ^java.io.ByteArrayOutputStream buffer (new java.io.ByteArrayOutputStream)
                           stream (new java.io.OutputStreamWriter buffer)]
-                      (json/write response-data stream)
+                      (json/write merged-data stream)
                       (.close stream)
                       (util/upload-bytes (.toByteArray buffer) (:query-s3-bucket env) keyname "application/json")
                       (l/info "Merge prev" (count previous-data) "with" (count data) "into" (count merged-data)))
@@ -122,35 +122,12 @@
   (let [url-base (:url-base env)
 
         ; Group into pathname => file
+        all {(str "collected/" date-str "/events-base.json") deposits}
 
-        all {[(str "collected/" date-str "/events.json")
-              (str url-base "collected/" (prev-date-str date-str) "/events.json")
-              (str url-base "collected/" (next-date-str date-str) "/events.json")]
-              deposits}
-
-        source (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "collected/" date-str "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "collected/" (prev-date-str date-str) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "collected/" (next-date-str date-str) "/sources/" (:source_id event) "/events.json")])) identity)
-        
-        doi (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
-                                             (str url-base "collected/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
-                                             (str url-base "collected/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")])) identity)
-        
-        doi-source (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "collected/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "collected/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "collected/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")])) identity)
-
-        all-results (merge all source doi doi-source)
-        num-queries (count all-results)
+        num-queries (count all)
         partition-size (/ num-queries num-threads)
 
-        partitions (partition-all partition-size all-results)
+        partitions (partition-all partition-size all)
         running-partitions (doall (map upload-in-thread partitions))]
 
   (l/info "Got" (count deposits) "deposits")
@@ -173,33 +150,12 @@
         ; Group into pathname => file
         all (group-and-project deposits (fn [event]
                                           (let [date-str (date-str-from-occurred event)]
-                                            [(str "occurred/" date-str "/events.json")
-                                             (str url-base "occurred/" (prev-date-str date-str) "/events.json")
-                                             (str url-base "occurred/" (next-date-str date-str) "/events.json")])) identity)
-
-        source (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "occurred/" date-str "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "occurred/" (prev-date-str date-str) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "occurred/" (next-date-str date-str) "/sources/" (:source_id event) "/events.json")])) identity)
-        
-        doi (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "occurred/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
-                                             (str url-base "occurred/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")
-                                             (str url-base "occurred/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/events.json")])) identity)
-        
-        doi-source (group-and-project deposits (fn [event]
-                                          (let [date-str (date-str-from-occurred event)]
-                                            [(str "occurred/" date-str "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "occurred/" (prev-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")
-                                             (str url-base "occurred/" (next-date-str date-str) "/works/" (cr-doi/non-url-doi (:obj_id event)) "/sources/" (:source_id event) "/events.json")])) identity)
-
-        all-results (merge all source doi doi-source)
-        num-queries (count all-results)
+                                            (str "occurred/" date-str "/events-base.json"))) identity)
+  
+        num-queries (count all)
         partition-size (/ num-queries num-threads)
 
-        partitions (partition-all partition-size all-results)
+        partitions (partition-all partition-size all)
         running-partitions (doall (map merge-upload-in-thread partitions))]
 
   (l/info "Got" (count deposits) "deposits")

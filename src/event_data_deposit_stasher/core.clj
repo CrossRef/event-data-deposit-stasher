@@ -19,8 +19,6 @@
     :lagotto-instance-url ; full base URL of lagotto instance.
   })
 
-; also :exclude-sources : comma-separated value of source names to exclude in query API.
-
 (defn missing-config-keys
   "Ensure all config keys are present. Return missing keys or nil if OK."
   []
@@ -87,9 +85,9 @@
                 collected-flag-exists (.doesObjectExist @util/aws-client (:query-s3-bucket env) collected-flag-name)
                 occurred-flag-exists (.doesObjectExist @util/aws-client (:query-s3-bucket env) occurred-flag-name)]
             
-            (l/info "Check input" input-name "exists:" input-exists)
-            (l/info "Check output flag 'collected' " collected-flag-name "exists: " collected-flag-exists)
-            (l/info "Check output flag 'occurred' " occurred-flag-name "exists: " occurred-flag-exists)
+            (l/info "Check input" input-name "exists in" (:archive-s3-bucket env) ":" input-exists)
+            (l/info "Check output flag 'collected' " collected-flag-name "exists in" (:query-s3-bucket env) ":" collected-flag-exists)
+            (l/info "Check output flag 'occurred' " occurred-flag-name "exists in " (:query-s3-bucket env) ":" occurred-flag-exists)
 
             ; Ability to re-create either independently depending on whether the flag exists (or has been removed to re-process).
             (when (and input-exists (or
@@ -98,19 +96,16 @@
               (let [input (util/download-json-file (:archive-s3-bucket env) input-name)
                     deposits (get input "deposits")
                     ; Normalize to Event Data Schema.
-                    normalized (map util/transform-deposit deposits)
-                    ; Exclude sources if necessary.
-                    excluded-sources (get-excluded-sources)
-                    filtered-source (remove #(excluded-sources (% "source_id")) normalized)]
+                    normalized (map util/transform-deposit deposits)]
 
                 (when (not collected-flag-exists)
                   (l/info "Update query API 'collected'" start-str)
-                  (stash/update-query-api-collected filtered-source start-str)
+                  (stash/update-query-api-collected normalized start-str)
                   (util/upload-bytes (byte-array 0) (:query-s3-bucket env) collected-flag-name "application/json"))
 
                 (when (not occurred-flag-exists)
                   (l/info "Update query API 'occurred'" start-str)
-                  (stash/update-query-api-occurred filtered-source start-str)
+                  (stash/update-query-api-occurred normalized start-str)
                   (util/upload-bytes (byte-array 0) (:query-s3-bucket env) occurred-flag-name "application/json")))))))))
 
 (defn invalid-command
